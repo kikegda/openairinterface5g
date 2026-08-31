@@ -1,0 +1,93 @@
+# syntax=docker/dockerfile:1
+# SPDX-License-Identifier: LicenseRef-CSSL-1.0
+
+# Development image for the TFM Stage 1 USRP validation.
+#
+# This image intentionally pins the userspace to Ubuntu 22.04 and UHD 4.4.0.0
+# to match the borrowed N310 systems. Building the image does not discover,
+# configure, or update any USRP.
+
+ARG UBUNTU_IMAGE=ubuntu:22.04
+
+FROM ${UBUNTU_IMAGE} AS stage1-usrp-base
+
+ENV DEBIAN_FRONTEND=noninteractive
+ENV TZ=Europe/Paris
+ENV BUILD_UHD_FROM_SOURCE=True
+ENV UHD_VERSION=4.4.0.0
+
+RUN apt-get update \
+    && apt-get install --yes --no-install-recommends \
+       bison \
+       build-essential \
+       ca-certificates \
+       ccache \
+       flex \
+       git \
+       libflatbuffers-dev \
+       libnanomsg-dev \
+       libpcre2-dev \
+       libzmq3-dev \
+       libzstd-dev \
+       m4 \
+       psmisc \
+       python3-dev \
+       python3-pip \
+       software-properties-common \
+       tzdata \
+       wget \
+       xxd \
+    && pip3 install --no-cache-dir --ignore-installed pyyaml \
+    && apt-get clean \
+    && rm -rf /var/lib/apt/lists/*
+
+# Copy only the dependency installer inputs first, so this expensive layer is
+# cached independently from subsequent Stage 1 source changes.
+WORKDIR /oai-ran/cmake_targets/tools
+COPY cmake_targets/tools/build_helper \
+     cmake_targets/tools/uhd-4.x-tdd-patch.diff \
+     ./
+
+WORKDIR /oai-ran/cmake_targets
+COPY cmake_targets/build_oai ./
+
+WORKDIR /oai-ran
+COPY oaienv ./
+
+# build_oai detects the container and builds UHD in the image. It does not run
+# uhd_find_devices or load an FPGA image on an attached radio.
+RUN /bin/sh oaienv \
+    && cd cmake_targets \
+    && mkdir -p log \
+    && ./build_oai -I -w USRP --install-optional-packages \
+    && uhd_config_info --version > /tmp/uhd-version.txt \
+    && grep -Eq '^UHD 4\.4\.' /tmp/uhd-version.txt
+
+FROM stage1-usrp-base AS stage1-usrp-build
+
+WORKDIR /oai-ran
+COPY . .
+
+# Build only the two NR softmodems required by the hardware experiment and
+# enable the unit tests that include the Stage 1 CFO-PSS test suite.
+RUN --mount=type=cache,target=/root/.cache/ccache/ \
+    --mount=type=cache,target=/root/.cache/cpm/ \
+    /bin/sh oaienv \
+    && cd cmake_targets \
+    && mkdir -p log \
+    && ./build_oai -c --ninja --gNB --nrUE -w USRP \
+       --cmake-opt -DENABLE_TESTS=ON
+
+RUN cd /oai-ran/cmake_targets/ran_build/build \
+    && ninja \
+       test_nr_pss_cfo_search_config \
+       test_nr_pss_cfo_hypothesis \
+       test_nr_pss_cfo_coarse_search \
+       test_nr_pss_cfo_fine_search \
+       test_nr_pss_cfo_stage1 \
+    && ctest --output-on-failure -R '^test_nr_pss_cfo_'
+
+ENV LD_LIBRARY_PATH=/usr/local/lib:/oai-ran/cmake_targets/ran_build/build
+WORKDIR /oai-ran/cmake_targets/ran_build/build
+
+CMD ["/bin/bash"]
