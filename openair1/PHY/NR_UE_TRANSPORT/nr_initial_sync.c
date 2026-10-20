@@ -244,10 +244,11 @@ bool nr_search_ssb_common(nr_ssb_search_params_t *params)
     for (int nid2 = 0; nid2 < NUMBER_PSS_SEQUENCE; ++nid2)
       pss_references[nid2] = pssTime[nid2];
 
+    const int num_timing_candidates = params->rxdata_size - params->ofdm_symbol_size + 1;
     const nr_pss_cfo_coarse_search_t stage1_search = {
         .rxdata = rxdata,
         .nb_antennas_rx = params->nb_antennas_rx,
-        .rxdata_length = params->rxdata_size,
+        .rxdata_length = num_timing_candidates,
         .ofdm_symbol_size = params->ofdm_symbol_size,
         .pss_time = {pss_references[0], pss_references[1], pss_references[2]},
         .sampling_rate_hz = params->sampling_rate,
@@ -505,7 +506,7 @@ nr_initial_sync_t nr_initial_sync(UE_nr_rxtx_proc_t *proc,
                                   PHY_VARS_NR_UE *ue,
                                   int input_sz,
                                   c16_t **input,
-                                  nr_gscn_info_t gscnInfo[MAX_GSCN_BAND],
+                                  const nr_gscn_info_t *gscnInfo,
                                   int numGscn)
 {
   NR_DL_FRAME_PARMS *fp = &ue->frame_parms;
